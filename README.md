@@ -7,74 +7,89 @@ This model determines whether a given image is gold or fools gold (pyrite). They
 
 ## The Algorithm
 
-The algorithm is a re-trained ResNet-18 model, fine-tuned on a large collection of Gold and Pyrite images (2 classes, see `Pyrite/labels.txt`). Weights are provided in two formats:
+The algorithm is a re-trained ResNet-18 model, fine-tuned on a collection of Gold and Pyrite images (2 classes, see `model/checkpoints/labels.txt`). Weights are provided in two formats:
 
-- `Pyrite/model_best.pth.tar` — a standard PyTorch checkpoint (`state_dict`, classes, accuracy/loss history, optimizer state). Loads with plain `torch`/`torchvision` on any OS or GPU/CPU.
-- `Pyrite/resnet18.onnx` — an exported ONNX version, for inference with ONNX Runtime, or as a starting point for TensorRT engines on Jetson-class devices.
+- `model/checkpoints/model_best.pth.tar` — a standard PyTorch checkpoint (`state_dict`, classes, accuracy/loss history, optimizer state). Loads with plain `torch`/`torchvision` on any OS or GPU/CPU.
+- `model/checkpoints/resnet18.onnx` — an exported ONNX version, for inference with ONNX Runtime, or as a starting point for TensorRT engines on Jetson-class devices.
 
 This means the model isn't tied to any particular hardware — it can be run and retrained on a regular PC, in the cloud, or on an edge device like a Jetson Nano.
 
-## Running this project (any machine)
+## Repo layout
 
-Requirements: Python 3.9+, `torch`, `torchvision`, `Pillow`.
+```
+model/                     everything related to training/inference
+  data/
+    train/{Gold,Pyrite}/   training images
+    val/{Gold,Pyrite}/     validation images (used to pick the best checkpoint)
+    test/{Gold,Pyrite}/    held-out images for final evaluation
+  checkpoints/
+    model_best.pth.tar      best checkpoint so far (by val accuracy)
+    resnet18.onnx           ONNX export of model_best
+    labels.txt              class names, one per line
+  common.py                shared checkpoint-loading/inference logic
+  train.py                 train / resume-train on data/
+  infer.py                 classify a single image (CLI)
+  export_onnx.py           re-export a checkpoint to ONNX
+  requirements.txt
+app/                        everything related to the web UI
+  package.json              npm run dev runs backend + frontend together
+  backend/
+    main.py                 FastAPI service exposing POST /api/predict
+    requirements.txt
+  frontend/                 Vite + React + TypeScript web UI
+```
+
+`model/data/*/Gold` and `model/data/*/Pyrite` currently only contain `.gitkeep` placeholders — drop your own images in (standard `torchvision.datasets.ImageFolder` layout: one subfolder per class) before training.
+
+## Setup
 
 ```bash
-pip install torch torchvision pillow
+pip install -r model/requirements.txt
 ```
 
-Run inference on an image:
+## Running inference
 
-```python
-import torch
-from torchvision import models, transforms
-from PIL import Image
-
-ckpt = torch.load("Pyrite/model_best.pth.tar", map_location="cpu", weights_only=False)
-classes = ckpt["classes"]  # ['Gold', 'Pyrite']
-
-model = models.resnet18(num_classes=ckpt["num_classes"])
-model.load_state_dict(ckpt["state_dict"])
-model.eval()
-
-preprocess = transforms.Compose([
-    transforms.Resize(ckpt["resolution"]),
-    transforms.CenterCrop(ckpt["resolution"]),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-img = Image.open("path/to/your/image.jpg").convert("RGB")
-x = preprocess(img).unsqueeze(0)
-
-with torch.no_grad():
-    output = model(x)
-    pred = output.argmax(1).item()
-
-print(classes[pred])
+```bash
+python3 model/infer.py path/to/your/image.jpg
 ```
 
-## Retraining / fine-tuning further
+## Web UI
 
-Because `model_best.pth.tar` is a normal PyTorch checkpoint, you can resume training with any standard image-classification training loop (e.g. torchvision's `ImageFolder` + a training script), on any machine with a GPU (or CPU, just slower). At a high level:
+A FastAPI backend serves the model, and a Vite/React/TypeScript frontend lets you drag-and-drop an image in the browser and see the Gold/Pyrite confidence breakdown.
 
-```python
-import torch
-from torch import nn, optim
-from torchvision import models
-
-ckpt = torch.load("Pyrite/model_best.pth.tar", map_location="cpu", weights_only=False)
-
-model = models.resnet18(num_classes=ckpt["num_classes"])
-model.load_state_dict(ckpt["state_dict"])
-
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-optimizer.load_state_dict(ckpt["optimizer"])
-
-criterion = nn.CrossEntropyLoss()
-# ... plug in your DataLoader over new/expanded Gold vs. Pyrite images and continue training ...
+One-time setup:
+```bash
+pip install -r app/backend/requirements.txt
+cd app && npm install            # installs concurrently
+npm --prefix frontend install
 ```
 
-Feed it more/varied Gold and Pyrite images (different lighting, backgrounds, angles) to improve generalization, then re-export to ONNX (`torch.onnx.export`) if you need the portable inference format.
+Then, from `app/`:
+```bash
+npm run dev
+```
+
+This runs the FastAPI server (port 8000) and the Vite dev server (port 5173) together. Open http://localhost:5173 — the Vite dev server proxies `/api/*` requests to the FastAPI server.
+
+## Training / retraining
+
+Populate `model/data/train/Gold`, `model/data/train/Pyrite`, `model/data/val/Gold`, `model/data/val/Pyrite` with images, then:
+
+```bash
+# train from scratch
+python3 model/train.py --data-dir model/data --epochs 10
+
+# fine-tune further from the existing checkpoint
+python3 model/train.py --data-dir model/data --epochs 10 --resume model/checkpoints/model_best.pth.tar
+```
+
+Each epoch writes `model/checkpoints/checkpoint.pth.tar` (latest) and, when validation accuracy improves, `model/checkpoints/model_best.pth.tar` (best-so-far) — the same checkpoint format used for inference and export.
+
+To refresh the ONNX export after retraining:
+
+```bash
+python3 model/export_onnx.py
+```
 
 ## Deploying on an NVIDIA Jetson Nano (optional)
 
@@ -85,15 +100,15 @@ The ONNX model can also be run at the edge using NVIDIA's [jetson-inference](htt
    ```
    sudo apt-get install libpython3-dev python3-numpy
    ```
-3. Place the `Pyrite` folder in `jetson-inference/python/training/classification/models`.
+3. Place the `model/checkpoints` folder (renamed to e.g. `Pyrite`) under `jetson-inference/python/training/classification/models`.
 4. From `jetson-inference/python/training/classification`, run:
    ```
    imagenet.py --model=models/Pyrite/resnet18.onnx --input_blob=input_0 --output_blob=output_0 --labels=models/Pyrite/labels.txt $FILELOCATION ProcessGold.jpg
    ```
-   (`$FILELOCATION` is the path to the image you want classified, e.g. `data/Pyrite/test/Gold/335.jpg`.)
+   (`$FILELOCATION` is the path to the image you want classified, e.g. `model/data/test/Gold/example.jpg`.)
 5. The processed image will be written to the classification folder.
 
-The included `resnet18.onnx.1.1.8201.GPU.FP16.engine` is a prebuilt TensorRT engine cached for a specific Jetson/TensorRT version combination — it will be regenerated automatically if versions don't match, so it's safe to delete if you hit compatibility issues.
+Note: `jetson-inference` will generate its own cached TensorRT engine file (`*.engine`) next to the ONNX model on first run — that file is specific to your device's GPU/TensorRT version and doesn't need to be committed to this repo.
 
 ![diagram](https://github.com/ZachNurk/FoolsGoldDetector/assets/142443751/462ea4c0-ffc9-4470-afb2-1f5f1013679d)
 
