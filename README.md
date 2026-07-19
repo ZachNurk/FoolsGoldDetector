@@ -1,6 +1,6 @@
 # Fools Gold Detector
 
-This model determines whether a given image is gold or fools gold (pyrite). They both look similar due to their color, but some people still confuse the two. This is designed as an educational tool — it may be helpful to people trying to educate others (primarily younger audiences) about minerals, and how some minerals can look really similar to others. It is not intended as a substitute for professional appraisal or lab-grade mineral testing.
+This model determines whether a given image is gold or fools gold (pyrite). They both have a similar color, so people mix them up pretty often. It's meant as an educational tool, mostly for teaching younger audiences about minerals and how some can look almost identical to others. It's not a substitute for professional appraisal or lab-grade mineral testing.
 
 ![gold4](https://github.com/ZachNurk/FoolsGoldDetector/assets/142443751/ca96117a-14bc-4779-b168-2433b68e489c)
 ![GoldProcessed](https://github.com/ZachNurk/FoolsGoldDetector/assets/142443751/60ca15e1-bd0d-45eb-a4a4-274a63ed0a7a)
