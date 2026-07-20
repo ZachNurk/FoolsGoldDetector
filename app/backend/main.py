@@ -4,6 +4,7 @@ Usage:
     uvicorn backend.main:app --reload --port 8000
 """
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -17,11 +18,14 @@ from common import load_model, predict  # noqa: E402
 
 CHECKPOINT = REPO_ROOT / "model" / "checkpoints" / "model_best.pth.tar"
 
+DEFAULT_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+EXTRA_ORIGINS = [o for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o]
+
 app = FastAPI(title="Fools Gold Detector API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=DEFAULT_ORIGINS + EXTRA_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
