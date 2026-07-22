@@ -27,7 +27,7 @@ export default function App() {
   return (
     <div className="app-root">
       <h1>Fools Gold Detector</h1>
-      <p>Upload a photo of a mineral specimen to classify it as Gold or Pyrite.</p>
+      <p>Upload a photo of a mineral specimen to classify it as Gold, Fools Gold (Pyrite), or Other.</p>
 
       <UploadBox onFile={handleFile} />
 
