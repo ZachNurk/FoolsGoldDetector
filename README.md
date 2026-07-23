@@ -7,7 +7,7 @@ This model determines whether a given image is gold or fools gold (pyrite). They
 
 ## The Algorithm
 
-The algorithm is a re-trained ResNet-18 model, fine-tuned on a collection of Gold and Pyrite images (2 classes, see `model/checkpoints/labels.txt`). Weights are provided in two formats:
+The algorithm is a ResNet-18 convolutional neural network (ImageNet-pretrained, with the final fully-connected layer replaced and fine-tuned for this task), trained on ~3,000 images split evenly across Gold, Pyrite, and Other (non-mineral/lookalike) — about 1,000 images per class (3 classes total, see `model/checkpoints/labels.txt`). Weights are provided in two formats:
 
 - `model/checkpoints/model_best.pth.tar` — a standard PyTorch checkpoint (`state_dict`, classes, accuracy/loss history, optimizer state). Loads with plain `torch`/`torchvision` on any OS or GPU/CPU.
 - `model/checkpoints/resnet18.onnx` — an exported ONNX version, for inference with ONNX Runtime, or as a starting point for TensorRT engines on Jetson-class devices.
@@ -17,19 +17,21 @@ This means the model isn't tied to any particular hardware — it can be run and
 ## Repo layout
 
 ```
-model/                     everything related to training/inference
+model/                          everything related to training/inference
   data/
-    train/{Gold,Pyrite}/   training images
-    val/{Gold,Pyrite}/     validation images (used to pick the best checkpoint)
-    test/{Gold,Pyrite}/    held-out images for final evaluation
+    train/{Gold,Pyrite,Other}/  training images (train.py auto-splits off ~15% for validation)
+    test/{Gold,Pyrite,Other}/   held-out images for final accuracy check, never auto-split
+    _scrape_review/             staging area for scraped images (gitignored, not training data)
   checkpoints/
-    model_best.pth.tar      best checkpoint so far (by val accuracy)
-    resnet18.onnx           ONNX export of model_best
-    labels.txt              class names, one per line
-  common.py                shared checkpoint-loading/inference logic
-  train.py                 train / resume-train on data/
-  infer.py                 classify a single image (CLI)
-  export_onnx.py           re-export a checkpoint to ONNX
+    model_best.pth.tar           best checkpoint so far (by val accuracy)
+    resnet18.onnx                ONNX export of model_best
+    labels.txt                   class names, one per line
+  common.py                     shared checkpoint-loading/inference logic
+  train.py                      train / resume-train on data/train + data/val
+  test.py                       run model_best against data/test, report accuracy + confusion matrix
+  infer.py                      classify a single image (CLI)
+  export_onnx.py                re-export a checkpoint to ONNX
+  scrape_images.py              pull candidate training images from DuckDuckGo image search
   requirements.txt
 app/                        everything related to the web UI
   package.json              npm run dev runs backend + frontend together
@@ -39,19 +41,40 @@ app/                        everything related to the web UI
   frontend/                 Vite + React + TypeScript web UI
 ```
 
-`model/data/*/Gold` and `model/data/*/Pyrite` currently only contain `.gitkeep` placeholders — drop your own images in (standard `torchvision.datasets.ImageFolder` layout: one subfolder per class) before training.
+Images are gitignored (`model/data/**/*.{jpg,jpeg,png,webp}`) — drop your own in (standard `torchvision.datasets.ImageFolder` layout: one subfolder per class) before training.
 
-## Setup
+## Run everything, start to finish
 
-```bash
-pip install -r model/requirements.txt
-```
+1. Install deps:
+   ```bash
+   pip install -r model/requirements.txt
+   ```
+2. (Optional) collect more training images, e.g. 100 of each class:
+   ```bash
+   python3 model/scrape_images.py --all --count 100
+   ```
+   Lands in `model/data/_scrape_review/<class>/` — review in Finder, delete duds, then move keepers into `model/data/train/<class>/`.
 
-## Running inference
-
-```bash
-python3 model/infer.py path/to/your/image.jpg
-```
+   To target one class with custom queries instead:
+   ```bash
+   python3 model/scrape_images.py --class Gold --query "gold nugget specimen" --query "raw gold ore" --count 100
+   ```
+3. Train:
+   ```bash
+   python3 model/train.py --data-dir model/data --epochs 10
+   ```
+4. Check accuracy on the held-out test set:
+   ```bash
+   python3 model/test.py --data-dir model/data/test
+   ```
+5. Classify one image:
+   ```bash
+   python3 model/infer.py path/to/your/image.jpg
+   ```
+6. Re-export ONNX for the web UI / edge deployment after retraining:
+   ```bash
+   python3 model/export_onnx.py
+   ```
 
 ## Web UI
 
@@ -71,9 +94,7 @@ npm run dev
 
 This runs the FastAPI server (port 8000) and the Vite dev server (port 5173) together. Open http://localhost:5173 — the Vite dev server proxies `/api/*` requests to the FastAPI server.
 
-## Training / retraining
-
-Populate `model/data/train/Gold`, `model/data/train/Pyrite`, `model/data/val/Gold`, `model/data/val/Pyrite` with images, then:
+## Training / retraining details
 
 ```bash
 # train from scratch
@@ -83,13 +104,9 @@ python3 model/train.py --data-dir model/data --epochs 10
 python3 model/train.py --data-dir model/data --epochs 10 --resume model/checkpoints/model_best.pth.tar
 ```
 
-Each epoch writes `model/checkpoints/checkpoint.pth.tar` (latest) and, when validation accuracy improves, `model/checkpoints/model_best.pth.tar` (best-so-far) — the same checkpoint format used for inference and export.
+`train.py` holds out ~15% of `model/data/train` for validation automatically, splitting by a hash of each file's path — deterministic across runs, and stable as you add more images (no separate `data/val` folder needed). Override with `--val-split 0.2`, etc.
 
-To refresh the ONNX export after retraining:
-
-```bash
-python3 model/export_onnx.py
-```
+Each epoch writes `model/checkpoints/checkpoint.pth.tar` (latest) and, when validation accuracy improves, `model/checkpoints/model_best.pth.tar` (best-so-far) — the same checkpoint format used for inference, testing, and export.
 
 ## Deploying on an NVIDIA Jetson Nano (optional)
 

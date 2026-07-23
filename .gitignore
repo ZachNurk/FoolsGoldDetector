@@ -6,3 +6,5 @@ model/data/**/*.jpg
 model/data/**/*.jpeg
 model/data/**/*.png
 model/data/**/*.webp
+.DS_STORE
+

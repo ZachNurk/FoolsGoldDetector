@@ -1,19 +1,22 @@
-"""Train or resume-train the Gold/Pyrite ResNet-18 classifier.
+"""Train or resume-train the Gold/Pyrite/Other ResNet-18 classifier.
 
-Expects data/train and data/val, each containing one subfolder per class
-(Gold/, Pyrite/) of images (torchvision.datasets.ImageFolder layout).
+Expects data/train containing one subfolder per class (Gold/, Pyrite/, Other/),
+torchvision.datasets.ImageFolder layout. Train/val split is done automatically,
+deterministically, by hashing each file's path -- no separate data/val folder
+needed, and the split stays stable as you add more images to data/train.
 
 Usage:
     python3 model/train.py --data-dir model/data --epochs 10
     python3 model/train.py --data-dir model/data --epochs 10 --resume model/checkpoints/model_best.pth.tar
 """
 import argparse
+import hashlib
 import os
 import time
 
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, models, transforms
 
 RESOLUTION = 224
@@ -36,6 +39,17 @@ def build_transforms(train):
         transforms.ToTensor(),
         transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
     ])
+
+
+def split_indices(samples, val_split):
+    """Deterministically bucket each sample into train/val by hashing its file path,
+    so the split is stable across runs even as new images are added to data/train."""
+    train_idx, val_idx = [], []
+    for i, (path, _) in enumerate(samples):
+        digest = hashlib.sha256(path.encode()).hexdigest()
+        bucket = int(digest, 16) % 100
+        (val_idx if bucket < val_split * 100 else train_idx).append(i)
+    return train_idx, val_idx
 
 
 def run_epoch(model, loader, criterion, optimizer, device, train, epoch, log_every=5):
@@ -72,6 +86,7 @@ def main():
     parser.add_argument("--model-dir", default="model/checkpoints")
     parser.add_argument("--resume", default=None, help="checkpoint to resume from")
     parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--val-split", type=float, default=0.15, help="fraction of data/train held out for validation")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--workers", type=int, default=2)
@@ -80,9 +95,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}", flush=True)
 
-    train_ds = datasets.ImageFolder(os.path.join(args.data_dir, "train"), build_transforms(True))
-    val_ds = datasets.ImageFolder(os.path.join(args.data_dir, "val"), build_transforms(False))
-    classes = train_ds.classes
+    train_root = os.path.join(args.data_dir, "train")
+    train_full = datasets.ImageFolder(train_root, build_transforms(True))
+    val_full = datasets.ImageFolder(train_root, build_transforms(False))
+    classes = train_full.classes
+    train_idx, val_idx = split_indices(train_full.samples, args.val_split)
+    train_ds = Subset(train_full, train_idx)
+    val_ds = Subset(val_full, val_idx)
     print(f"classes: {classes}", flush=True)
     print(f"train images: {len(train_ds)}, val images: {len(val_ds)}", flush=True)
 
